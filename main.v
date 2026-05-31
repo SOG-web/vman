@@ -18,6 +18,7 @@ struct Options {
 	fork_add    string @[long: 'fork-add'; xdoc: 'Register a custom fork (requires --url and --build-cmd)']
 	fork_url    string @[long: url; xdoc: 'Git URL for --fork-add']
 	fork_build  string @[long: 'build-cmd'; xdoc: 'Build command(s) for --fork-add, comma-separated']
+	fork_bin    string @[long: 'fork-bin'; xdoc: 'Path to the V binary for --fork-add']
 	fork_rm     string @[long: 'fork-rm'; xdoc: 'Remove a registered fork']
 	show_help   bool   @[long: help; short: h; xdoc: 'Display this help and exit']
 }
@@ -43,8 +44,9 @@ fn get_config_file() string {
 }
 
 struct ForkInfo {
-	url   string
-	build []string
+	url    string
+	build  []string
+	binary string
 }
 
 struct Config {
@@ -70,6 +72,7 @@ fn normalize_args(raw []string) []string {
 		'--fork-add',
 		'--url',
 		'--build-cmd',
+		'--fork-bin',
 		'--fork-rm',
 	]
 	mut skip_next := false
@@ -136,7 +139,7 @@ fn main() {
 			eprintln('example: vman --fork-add relaxed --url https://github.com/SOG-web/v --build-cmd "make,./v -cc clang -o vnew cmd/v"')
 			exit(1)
 		}
-		fork_add_with_url(opts.fork_add, opts.fork_url, opts.fork_build)
+		fork_add_with_url(opts.fork_add, opts.fork_url, opts.fork_build, opts.fork_bin)
 	} else if opts.fork_rm != '' {
 		fork_rm(opts.fork_rm)
 	} else {
@@ -219,7 +222,17 @@ fn install_version(version string) {
 		return
 	}
 
-	v_bin := target + '/v/v'
+	// Official V zips extract to v/ subdirectory. Move contents up to target/.
+	v_subdir := target + '/v'
+	if os.is_dir(v_subdir) {
+		entries := os.ls(v_subdir) or { [] }
+		for e in entries {
+			os.mv(v_subdir + '/' + e, target + '/' + e, os.MvParams{}) or {}
+		}
+		os.rmdir(v_subdir) or {}
+	}
+
+	v_bin := target + '/v'
 	if os.exists(v_bin) {
 		os.chmod(v_bin, 0o755) or {}
 	}
@@ -267,7 +280,7 @@ fn install_fork(fork_name string, config Config) {
 		}
 	}
 
-	v_bin_path := find_v_binary(tmp + '/repo')
+	v_bin_path := find_v_binary(tmp + '/repo', info.binary)
 	if v_bin_path == '' {
 		eprintln('error: could not find V binary in build output')
 		eprintln('make sure your build commands produce a v binary')
@@ -277,20 +290,25 @@ fn install_fork(fork_name string, config Config) {
 
 	os.mkdir_all(target) or {}
 	os.execute('cp -R ${tmp}/repo/. ${target}/')
-	os.chmod(target + '/v', 0o755) or {}
-	if os.exists(target + '/vnew') {
-		os.chmod(target + '/vnew', 0o755) or {}
-	}
-
 	os.rmdir_all(tmp) or {}
+
+	v_bin := find_v_binary(target, info.binary)
+	if v_bin == '' {
+		eprintln('error: could not find V binary')
+		return
+	}
+	v_dir := target + '/v'
+	os.mkdir_all(v_dir) or {}
+	os.mv(v_bin, v_dir + '/v', os.MvParams{}) or {}
+	os.chmod(v_dir + '/v', 0o755) or {}
 
 	println('Fork ${fork_name} installed to ${target}')
 	println('Run `vman use ${fork_name}` to switch to it.')
 }
 
-fn find_v_binary(dir string) string {
+fn find_v_binary(dir string, binary string) string {
 	candidates := [
-		dir + '/vnew',
+		dir + '/' + binary,
 		dir + '/v',
 		dir + '/v/v',
 	]
@@ -368,6 +386,12 @@ fn install_latest() {
 // ────────────────────────────────────────────────────────────
 
 fn use_version(version string) {
+	cfg := load_config()
+	binary := if version in cfg.forks {
+		cfg.forks[version].binary
+	} else {
+		'v'
+	}
 	vdir := get_versions_dir()
 	target := vdir + '/' + version
 	if !os.is_dir(target) {
@@ -376,15 +400,30 @@ fn use_version(version string) {
 		return
 	}
 
-	v_bin := target + '/v'
+	v_bin := find_v_binary(target, binary)
+	println('v_bin: ${v_bin}')
 	if !os.exists(v_bin) {
 		eprintln('error: V binary not found at ${v_bin}')
 		return
 	}
 
+	// create a new folder within target called vman-bin
+	vman_bin := target + '/vman-bin'
+	os.mkdir(vman_bin) or {
+		eprintln('error: failed to create vman-bin folder: ${err}')
+		return
+	}
+
+	// copy v_bin to vman_bin
+	os.cp(v_bin, vman_bin) or {
+		eprintln('error: failed to copy V binary to vman-bin folder: ${err}')
+		return
+	}
+
 	clink := get_current_link()
 	os.rm(clink) or {}
-	os.symlink(target + '/v', clink) or { panic('failed to create symlink: ${err}') }
+	println('${vman_bin} -> ${clink}')
+	os.symlink(vman_bin, clink) or { panic('failed to create symlink: ${err}') }
 
 	os.write_file(get_default_file(), version) or {}
 
@@ -467,12 +506,13 @@ fn read_current() string {
 // Fork management
 // ────────────────────────────────────────────────────────────
 
-fn fork_add_with_url(name string, url string, build_cmd string) {
+fn fork_add_with_url(name string, url string, build_cmd string, fork_bin string) {
 	mut config := load_config()
 	build_cmds := build_cmd.split(',').map(it.trim_space())
 	config.forks[name] = ForkInfo{
-		url:   url
-		build: build_cmds
+		url:    url
+		build:  build_cmds
+		binary: fork_bin
 	}
 	save_config(config)
 	println('fork `${name}` registered: ${url}')

@@ -54,6 +54,7 @@ Register a fork with its git URL and build commands:
 vman --fork-add=relaxed \
   --url=https://github.com/SOG-web/v \
   --build-cmd="make,./v -cc clang -o vnew cmd/v"
+  --fork-bin="vnew"
 ```
 
 `--build-cmd` takes comma-separated commands that run in order inside the cloned repo. VFLAGS are automatically cleared during builds to prevent conflicts.
