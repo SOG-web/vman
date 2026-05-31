@@ -1,0 +1,21 @@
+# Build artifacts
+vman
+*.exe
+*.so
+*.dylib
+*.dll
+
+# Test output files
+test_output/
+
+# Editor/system metadata
+.DS_Store
+.idea/
+.vscode/
+*.iml
+
+# V modules
+modules/
+
+# Logs
+*.log

@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-latest]
+        include:
+          - os: ubuntu-22.04
+            cc: gcc
+            artifact: vman_linux
+            binary: vman
+          - os: macos-15
+            cc: clang
+            artifact: vman_macos_arm64
+            binary: vman
+          - os: windows-latest
+            cc: msvc
+            artifact: vman_windows
+            binary: vman.exe
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install V
+        run: |
+          git clone --depth=1 https://github.com/vlang/v /tmp/v
+          cd /tmp/v
+          make
+          ./v -cc ${{ matrix.cc }} -o /tmp/vboot cmd/v
+        shell: bash
+
+      - name: Build vman (Unix)
+        if: runner.os != 'Windows'
+        run: /tmp/vboot -cc ${{ matrix.cc }} -o vman .
+
+      - name: Build vman (Windows)
+        if: runner.os == 'Windows'
+        run: /tmp/vboot.exe -cc ${{ matrix.cc }} -o vman.exe .
+
+      - name: Run tests (Unix)
+        if: runner.os != 'Windows'
+        run: /tmp/vboot -cc ${{ matrix.cc }} test main_test.v
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: /tmp/vboot.exe -cc ${{ matrix.cc }} test main_test.v
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.binary }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Package artifacts
+        run: |
+          cd vman_linux && zip -r9 ../vman_linux.zip . && cd ..
+          cd vman_macos_arm64 && zip -r9 ../vman_macos_arm64.zip . && cd ..
+          cd vman_windows && zip -r9 ../vman_windows.zip . && cd ..
+
+      - name: Create release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: |
+            vman_linux.zip
+            vman_macos_arm64.zip
+            vman_windows.zip
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
