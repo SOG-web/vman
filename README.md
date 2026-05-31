@@ -58,6 +58,7 @@ vman --fork-add=relaxed \
 ```
 
 `--build-cmd` takes comma-separated commands that run in order inside the cloned repo. VFLAGS are automatically cleared during builds to prevent conflicts.
+`--fork-bin` specifies the binary to use after building, defaults to `v`.
 
 Install and use the fork like any version:
 
@@ -121,23 +122,4 @@ vman --fork-add=local --url=/path/to/local/v --build-cmd="make"
     relaxed/         # Fork source tree with binary
   current -> ~/.vman/versions/0.5.1/v
   config.json        # Registered forks with URLs and build commands
-```
-
-## Per-project versions
-
-Create a `.v-version` file in your project root:
-
-```bash
-echo "0.5.1" > .v-version
-```
-
-Then add to your shell profile:
-
-```bash
-cd() {
-    builtin cd "$@"
-    if [ -f .v-version ]; then
-        export PATH="$HOME/.vman/versions/$(cat .v-version)/v:$PATH"
-    fi
-}
 ```
