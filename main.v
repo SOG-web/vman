@@ -410,14 +410,26 @@ fn use_version(version string) {
 	// create a new folder within target called vman-bin
 	vman_bin := target + '/vman-bin'
 	os.mkdir(vman_bin) or {
-		eprintln('error: failed to create vman-bin folder: ${err}')
-		return
+		// if the folder already exists, ignore the error
+		if !os.is_dir(vman_bin) {
+			eprintln('error: failed to create vman-bin folder: ${err}')
+			return
+		}
 	}
 
 	// copy v_bin to vman_bin
 	os.cp(v_bin, vman_bin) or {
 		eprintln('error: failed to copy V binary to vman-bin folder: ${err}')
 		return
+	}
+
+	// rename the copied binary to v
+	if binary != 'v' {
+		new_name := vman_bin + '/v'
+		os.rename(vman_bin + '/' + binary, new_name) or {
+			eprintln('error: failed to rename V binary: ${err}')
+			return
+		}
 	}
 
 	clink := get_current_link()
