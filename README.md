@@ -23,6 +23,11 @@ Then add to your shell profile:
 export PATH="$HOME/.vman/current:$PATH"
 ```
 
+## Symlink Notice
+vman uses symlinks to manage versions. The `current` symlink points to the active version.
+So do not run `v symlink`; use `vman` instead.
+If you already have a `v` symlink, remove it after using `vman` to install a version.
+
 ## Usage
 
 ```bash
