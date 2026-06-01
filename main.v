@@ -21,6 +21,7 @@ struct Options {
 	fork_bin    string @[long: 'fork-bin'; xdoc: 'Path to the V binary for --fork-add']
 	fork_rm     string @[long: 'fork-rm'; xdoc: 'Remove a registered fork']
 	show_help   bool   @[long: help; short: h; xdoc: 'Display this help and exit']
+	force       bool   @[long: force; short: f; xdoc: 'Force overwrite of existing version']
 }
 
 fn get_vman_dir() string {
@@ -74,6 +75,7 @@ fn normalize_args(raw []string) []string {
 		'--build-cmd',
 		'--fork-bin',
 		'--fork-rm',
+		'--force',
 	]
 	mut skip_next := false
 	for i, arg in raw {
@@ -119,12 +121,12 @@ fn main() {
 		show_current()
 	} else if opts.install != '' {
 		if opts.install == 'latest' {
-			install_latest()
+			install_latest(opts.force)
 		} else {
-			install_version(opts.install)
+			install_version(opts.install, opts.force)
 		}
 	} else if opts.install_src != '' {
-		install_from_source(opts.install_src)
+		install_from_source(opts.install_src, opts.force)
 	} else if opts.use != '' {
 		use_version(opts.use)
 	} else if opts.uninstall != '' {
@@ -190,17 +192,21 @@ fn print_help() {
 // Install
 // ────────────────────────────────────────────────────────────
 
-fn install_version(version string) {
+fn install_version(version string, force bool) {
 	vdir := get_versions_dir()
 	target := vdir + '/' + version
 	if os.exists(target) {
-		println('V ${version} is already installed.')
-		return
+		if force {
+			os.rmdir_all(target) or { panic('failed to remove ${target}: ${err}') }
+		} else {
+			println('V ${version} is already installed. Use --force to reinstall.')
+			return
+		}
 	}
 
 	config := load_config()
 	if version in config.forks {
-		install_fork(version, config)
+		install_fork(version, config, force)
 		return
 	}
 
@@ -222,20 +228,7 @@ fn install_version(version string) {
 		return
 	}
 
-	// Official V zips extract to v/ subdirectory. Move contents up to target/.
-	v_subdir := target + '/v'
-	if os.is_dir(v_subdir) {
-		entries := os.ls(v_subdir) or { [] }
-		for e in entries {
-			os.mv(v_subdir + '/' + e, target + '/' + e, os.MvParams{}) or {}
-		}
-		os.rmdir(v_subdir) or {}
-	}
-
-	v_bin := target + '/v'
-	if os.exists(v_bin) {
-		os.chmod(v_bin, 0o755) or {}
-	}
+	os.chmod(target + '/v', 0o755) or {}
 
 	os.rm(dl_path) or {}
 	os.rmdir_all(vman_root + '/tmp') or {}
@@ -244,14 +237,18 @@ fn install_version(version string) {
 	println('Run `vman use ${version}` to switch to it.')
 }
 
-fn install_fork(fork_name string, config Config) {
+fn install_fork(fork_name string, config Config, force bool) {
 	info := config.forks[fork_name]
 
 	vdir := get_versions_dir()
 	target := vdir + '/' + fork_name
 	if os.exists(target) {
-		println('Fork ${fork_name} is already installed.')
-		return
+		if force {
+			os.rmdir_all(target) or { panic('failed to remove ${target}: ${err}') }
+		} else {
+			println('Fork ${fork_name} is already installed. Use --force to reinstall.')
+			return
+		}
 	}
 
 	println('cloning ${fork_name} from ${info.url}...')
@@ -332,12 +329,16 @@ fn find_v_binary(dir string, binary string) string {
 	return ''
 }
 
-fn install_from_source(version string) {
+fn install_from_source(version string, force bool) {
 	vdir := get_versions_dir()
 	target := vdir + '/' + version
 	if os.exists(target) {
-		println('V ${version} is already installed.')
-		return
+		if force {
+			os.rmdir_all(target) or { panic('failed to remove ${target}: ${err}') }
+		} else {
+			println('V ${version} is already installed. Use --force to reinstall.')
+			return
+		}
 	}
 
 	println('building V ${version} from source...')
@@ -375,10 +376,10 @@ fn install_from_source(version string) {
 	println('Run `vman use ${version}` to switch to it.')
 }
 
-fn install_latest() {
+fn install_latest(force bool) {
 	latest := get_latest_version() or { panic('failed to get latest version: ${err}') }
 	println('latest version: ${latest}')
-	install_version(latest)
+	install_version(latest, force)
 }
 
 // ────────────────────────────────────────────────────────────
@@ -400,42 +401,50 @@ fn use_version(version string) {
 		return
 	}
 
-	v_bin := find_v_binary(target, binary)
+	mut v_bin := find_v_binary(target, binary)
 	println('v_bin: ${v_bin}')
 	if !os.exists(v_bin) {
 		eprintln('error: V binary not found at ${v_bin}')
 		return
 	}
 
-	// create a new folder within target called vman-bin
-	vman_bin := target + '/vman-bin'
-	os.mkdir(vman_bin) or {
-		// if the folder already exists, ignore the error
-		if !os.is_dir(vman_bin) {
-			eprintln('error: failed to create vman-bin folder: ${err}')
-			return
-		}
-	}
-
-	// copy v_bin to vman_bin
-	os.cp(v_bin, vman_bin) or {
-		eprintln('error: failed to copy V binary to vman-bin folder: ${err}')
-		return
-	}
-
 	// rename the copied binary to v
 	if binary != 'v' {
-		new_name := vman_bin + '/v'
-		os.rename(vman_bin + '/' + binary, new_name) or {
-			eprintln('error: failed to rename V binary: ${err}')
-			return
+		new_name := target + '/v'
+		mut already := os.exists(target + '/v.bak')
+
+		println('renaming ${v_bin} to ${new_name}')
+		// rename the binary to v file
+		if !already {
+			// there might be a binary file called v already in the target folder, move it out of the way first
+			// Check
+			if os.exists(target + '/v') {
+				// check if it's a regular file, not a directory
+				if !os.is_dir(target + '/v') {
+					os.mv(target + '/v', target + '/v.bak') or {}
+				}
+			}
+			os.rename(v_bin, target + '/v') or {
+				eprintln('error: failed to rename V binary: ${err}')
+				return
+			}
 		}
+
+		// get the dir of the binary
+		v_bin_dir := os.dir(new_name)
+		println('v_bin_dir: ${v_bin_dir}')
+		v_bin = v_bin_dir
+	}
+
+	if binary == 'v' {
+		println('v_bin: ${v_bin}')
+		v_bin = target + '/v'
 	}
 
 	clink := get_current_link()
 	os.rm(clink) or {}
-	println('${vman_bin} -> ${clink}')
-	os.symlink(vman_bin, clink) or { panic('failed to create symlink: ${err}') }
+	println('${v_bin} -> ${clink}')
+	os.symlink(v_bin, clink) or { panic('failed to create symlink: ${err}') }
 
 	os.write_file(get_default_file(), version) or {}
 

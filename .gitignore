@@ -1,5 +1,6 @@
 # Build artifacts
 vman
+v
 *.exe
 *.so
 *.dylib
